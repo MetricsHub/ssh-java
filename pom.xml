@@ -10,7 +10,7 @@
 	<artifactId>ssh-java</artifactId>
 	<name>SSH Java Client</name>
 	<version>1.0.04-SNAPSHOT</version>
-	<description>SSH Cilent Library for Java</description>
+	<description>SSH Client Library for Java</description>
 
 	<organization>
 		<name>MetricsHub</name>
