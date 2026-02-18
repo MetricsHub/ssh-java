@@ -2,13 +2,17 @@ package org.metricshub.ssh;
 
 import com.trilead.ssh2.ChannelCondition;
 import com.trilead.ssh2.Connection;
+import com.trilead.ssh2.SFTPv3Client;
+import com.trilead.ssh2.SFTPv3FileAttributes;
 import com.trilead.ssh2.Session;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.Optional;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedConstruction;
 import org.mockito.Mockito;
 
 class SSHClientTest {
@@ -523,6 +527,97 @@ class SSHClientTest {
 				.waitForNewData(5000L);
 
 			Assertions.assertEquals(Optional.of("Hello WorldError"), sshClient.read(0, 5));
+		}
+	}
+
+	@Test
+	void testFileSize() throws Exception {
+		final Connection sshConnection = Mockito.mock(Connection.class);
+		final String filePath = "/path/to/file.txt";
+
+		// Case not Connected
+		try (final SshClient sshClient = Mockito.spy(new SshClient(HOSTNAME))) {
+			Mockito.verify(sshClient, Mockito.never()).checkIfAuthenticated();
+
+			Assertions.assertThrows(IllegalStateException.class, () -> sshClient.fileSize(filePath));
+		}
+
+		// Case not authenticated
+		try (final SshClient sshClient = Mockito.spy(new SshClient(HOSTNAME))) {
+			Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
+			Mockito.doReturn(false).when(sshConnection).isAuthenticationComplete();
+
+			Assertions.assertThrows(IllegalStateException.class, () -> sshClient.fileSize(filePath));
+		}
+
+		// Case file does not exist (IOException)
+		try (
+			final SshClient sshClient = Mockito.spy(new SshClient(HOSTNAME));
+			final MockedConstruction<SFTPv3Client> mockedConstruction = Mockito.mockConstruction(
+				SFTPv3Client.class,
+				(mock, context) -> {
+					Mockito.when(mock.stat(filePath)).thenThrow(new IOException("File not found"));
+				}
+			)
+		) {
+			Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
+			Mockito.doReturn(true).when(sshConnection).isAuthenticationComplete();
+
+			Assertions.assertThrows(IOException.class, () -> sshClient.fileSize(filePath));
+		}
+
+		// Case file size is 0
+		try (
+			final SshClient sshClient = Mockito.spy(new SshClient(HOSTNAME));
+			final MockedConstruction<SFTPv3Client> mockedConstruction = Mockito.mockConstruction(
+				SFTPv3Client.class,
+				(mock, context) -> {
+					final SFTPv3FileAttributes attributes = new SFTPv3FileAttributes();
+					attributes.size = 0L;
+					Mockito.when(mock.stat(filePath)).thenReturn(attributes);
+				}
+			)
+		) {
+			Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
+			Mockito.doReturn(true).when(sshConnection).isAuthenticationComplete();
+
+			Assertions.assertEquals(0L, sshClient.fileSize(filePath));
+		}
+
+		// Case file size is small (100 bytes)
+		try (
+			final SshClient sshClient = Mockito.spy(new SshClient(HOSTNAME));
+			final MockedConstruction<SFTPv3Client> mockedConstruction = Mockito.mockConstruction(
+				SFTPv3Client.class,
+				(mock, context) -> {
+					final SFTPv3FileAttributes attributes = new SFTPv3FileAttributes();
+					attributes.size = 100L;
+					Mockito.when(mock.stat(filePath)).thenReturn(attributes);
+				}
+			)
+		) {
+			Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
+			Mockito.doReturn(true).when(sshConnection).isAuthenticationComplete();
+
+			Assertions.assertEquals(100L, sshClient.fileSize(filePath));
+		}
+
+		// Case file size is large (1GB)
+		try (
+			final SshClient sshClient = Mockito.spy(new SshClient(HOSTNAME));
+			final MockedConstruction<SFTPv3Client> mockedConstruction = Mockito.mockConstruction(
+				SFTPv3Client.class,
+				(mock, context) -> {
+					final SFTPv3FileAttributes attributes = new SFTPv3FileAttributes();
+					attributes.size = 1073741824L;
+					Mockito.when(mock.stat(filePath)).thenReturn(attributes);
+				}
+			)
+		) {
+			Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
+			Mockito.doReturn(true).when(sshConnection).isAuthenticationComplete();
+
+			Assertions.assertEquals(1073741824L, sshClient.fileSize(filePath));
 		}
 	}
 }
