@@ -1032,7 +1032,7 @@ public class SshClient implements AutoCloseable {
 	 * Check if already authenticate.
 	 */
 	void checkIfAuthenticated() {
-		if (!getSshConnection().isAuthenticationComplete()) {
+		if (getSshConnection() == null || !getSshConnection().isAuthenticationComplete()) {
 			throw new IllegalStateException("Authentication is required first");
 		}
 	}
