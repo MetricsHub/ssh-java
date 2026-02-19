@@ -346,6 +346,34 @@ public class SshClient implements AutoCloseable {
 		return pslFileResult.toString();
 	}
 
+	/**
+	 * Returns the file size.
+	 *
+	 * @param filePath Path to the file on the remote system
+	 * @return the file size
+	 * @throws IOException if the file does not exist
+	 */
+	public long fileSize(final String filePath) throws IOException {
+		SFTPv3Client sftpClient = null;
+		try {
+			// Sanity check
+			checkIfAuthenticated();
+
+			// Create the SFTP client
+			sftpClient = new SFTPv3Client(sshConnection);
+
+			// Read the file attributes
+			final SFTPv3FileAttributes attributes = sftpClient.stat(filePath);
+
+			return attributes.size;
+		} finally {
+			// Deallocate
+			if (sftpClient != null) {
+				sftpClient.close();
+			}
+		}
+	}
+
 	private StringBuilder listSubDirectory(
 		SFTPv3Client sftpClient,
 		String remoteDirectoryPath,
@@ -1008,7 +1036,7 @@ public class SshClient implements AutoCloseable {
 	 * Check if already authenticate.
 	 */
 	void checkIfAuthenticated() {
-		if (!getSshConnection().isAuthenticationComplete()) {
+		if (getSshConnection() == null || !getSshConnection().isAuthenticationComplete()) {
 			throw new IllegalStateException("Authentication is required first");
 		}
 	}
