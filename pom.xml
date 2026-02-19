@@ -9,7 +9,7 @@
 
 	<artifactId>ssh-java</artifactId>
 	<name>SSH Java Client</name>
-	<version>1.0.04</version>
+	<version>1.0.05-SNAPSHOT</version>
 	<description>SSH Client Library for Java</description>
 
 	<organization>
@@ -36,7 +36,7 @@
 	<scm>
 		<connection>scm:git:https://github.com/metricsHub/ssh-java.git</connection>
 		<url>https://github.com/metricsHub/ssh-java</url>
-		<tag>v1.0.04</tag>
+		<tag>HEAD</tag>
 	</scm>
 
 	<developers>
@@ -84,7 +84,7 @@
 
 		<!-- Reproducible Build -->
 		<!-- See https://maven.apache.org/guides/mini/guide-reproducible-builds.html -->
-		<project.build.outputTimestamp>2026-02-19T11:08:08Z</project.build.outputTimestamp>
+		<project.build.outputTimestamp>2026-02-19T11:09:02Z</project.build.outputTimestamp>
 	</properties>
 
 	<dependencyManagement>
