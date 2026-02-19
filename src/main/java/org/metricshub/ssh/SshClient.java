@@ -356,19 +356,18 @@ public class SshClient implements AutoCloseable {
 		try {
 			// Sanity check
 			checkIfAuthenticated();
-	
+
 			// Create the SFTP client
 			SFTPv3Client sftpClient = new SFTPv3Client(sshConnection);
-	
+
 			// Read the file attributes
 			final SFTPv3FileAttributes attributes = sftpClient.stat(filePath);
-	
+
 			// Deallocate
 			sftpClient.close();
-	
+
 			return attributes.size;
 		} catch (Exception e) {
-			
 			return null;
 		}
 	}
