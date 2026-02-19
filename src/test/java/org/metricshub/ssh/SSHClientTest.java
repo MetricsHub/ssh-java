@@ -531,7 +531,7 @@ class SSHClientTest {
 	}
 
 	@Test
-	void testFileSize() throws Exception {
+	void testFileSize() {
 		final Connection sshConnection = Mockito.mock(Connection.class);
 		final String filePath = "/path/to/file.txt";
 
@@ -539,7 +539,7 @@ class SSHClientTest {
 		try (final SshClient sshClient = Mockito.spy(new SshClient(HOSTNAME))) {
 			Mockito.verify(sshClient, Mockito.never()).checkIfAuthenticated();
 
-			Assertions.assertThrows(IllegalStateException.class, () -> sshClient.fileSize(filePath));
+			Assertions.assertNull(sshClient.fileSize(filePath));
 		}
 
 		// Case not authenticated
@@ -547,7 +547,7 @@ class SSHClientTest {
 			Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
 			Mockito.doReturn(false).when(sshConnection).isAuthenticationComplete();
 
-			Assertions.assertThrows(IllegalStateException.class, () -> sshClient.fileSize(filePath));
+			Assertions.assertNull(sshClient.fileSize(filePath));
 		}
 
 		// Case file does not exist (IOException)
@@ -563,7 +563,7 @@ class SSHClientTest {
 			Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
 			Mockito.doReturn(true).when(sshConnection).isAuthenticationComplete();
 
-			Assertions.assertThrows(IOException.class, () -> sshClient.fileSize(filePath));
+			Assertions.assertNull(sshClient.fileSize(filePath));
 		}
 
 		// Case file size is 0
@@ -581,7 +581,7 @@ class SSHClientTest {
 			Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
 			Mockito.doReturn(true).when(sshConnection).isAuthenticationComplete();
 
-			Assertions.assertEquals(0L, sshClient.fileSize(filePath));
+			Assertions.assertEquals(Long.valueOf(0L), sshClient.fileSize(filePath));
 		}
 
 		// Case file size is small (100 bytes)
@@ -599,7 +599,7 @@ class SSHClientTest {
 			Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
 			Mockito.doReturn(true).when(sshConnection).isAuthenticationComplete();
 
-			Assertions.assertEquals(100L, sshClient.fileSize(filePath));
+			Assertions.assertEquals(Long.valueOf(100L), sshClient.fileSize(filePath));
 		}
 
 		// Case file size is large (1GB)
@@ -617,7 +617,7 @@ class SSHClientTest {
 			Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
 			Mockito.doReturn(true).when(sshConnection).isAuthenticationComplete();
 
-			Assertions.assertEquals(1073741824L, sshClient.fileSize(filePath));
+			Assertions.assertEquals(Long.valueOf(1073741824L), sshClient.fileSize(filePath));
 		}
 	}
 }

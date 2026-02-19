@@ -350,23 +350,27 @@ public class SshClient implements AutoCloseable {
 	 * Returns the file size.
 	 *
 	 * @param filePath Path to the file on the remote system
-	 * @return the file size
-	 * @throws IOException if the file does not exist
+	 * @return the file size, null if any problem occurs
 	 */
-	public long fileSize(final String filePath) throws IOException {
-		// Sanity check
-		checkIfAuthenticated();
-
-		// Create the SFTP client
-		SFTPv3Client sftpClient = new SFTPv3Client(sshConnection);
-
-		// Read the file attributes
-		final SFTPv3FileAttributes attributes = sftpClient.stat(filePath);
-
-		// Deallocate
-		sftpClient.close();
-
-		return attributes.size;
+	public Long fileSize(final String filePath) {
+		try {
+			// Sanity check
+			checkIfAuthenticated();
+	
+			// Create the SFTP client
+			SFTPv3Client sftpClient = new SFTPv3Client(sshConnection);
+	
+			// Read the file attributes
+			final SFTPv3FileAttributes attributes = sftpClient.stat(filePath);
+	
+			// Deallocate
+			sftpClient.close();
+	
+			return attributes.size;
+		} catch (Exception e) {
+			
+			return null;
+		}
 	}
 
 	private StringBuilder listSubDirectory(
