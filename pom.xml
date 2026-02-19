@@ -118,7 +118,7 @@
 		<dependency>
 			<groupId>org.mockito</groupId>
 			<artifactId>mockito-junit-jupiter</artifactId>
-			<version>5.17.0</version>
+			<version>5.21.0</version>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>
@@ -130,7 +130,7 @@
 			<plugin>
 				<groupId>com.hubspot.maven.plugins</groupId>
 				<artifactId>prettier-maven-plugin</artifactId>
-				<version>0.21</version>
+				<version>0.22</version>
 				<configuration>
 					<prettierJavaVersion>2.5.0</prettierJavaVersion>
 					<ignoreConfigFile>false</ignoreConfigFile>
