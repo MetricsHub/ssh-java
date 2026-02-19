@@ -43,8 +43,8 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.Charset;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
-import java.util.Vector;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -355,8 +355,7 @@ public class SshClient implements AutoCloseable {
 		StringBuilder resultBuilder
 	) throws IOException {
 		if (depth <= 15) {
-			@SuppressWarnings("unchecked")
-			Vector<SFTPv3DirectoryEntry> pathContents = sftpClient.ls(remoteDirectoryPath);
+			List<SFTPv3DirectoryEntry> pathContents = sftpClient.ls(remoteDirectoryPath);
 
 			// Fix the remoteDirectoryPath (without the last '/')
 			if (remoteDirectoryPath.endsWith("/")) {
