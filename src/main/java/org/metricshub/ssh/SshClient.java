@@ -29,6 +29,7 @@ import com.trilead.ssh2.ChannelCondition;
 import com.trilead.ssh2.Connection;
 import com.trilead.ssh2.InteractiveCallback;
 import com.trilead.ssh2.SCPClient;
+import com.trilead.ssh2.SFTPException;
 import com.trilead.ssh2.SFTPv3Client;
 import com.trilead.ssh2.SFTPv3DirectoryEntry;
 import com.trilead.ssh2.SFTPv3FileAttributes;
@@ -42,10 +43,10 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -374,109 +375,192 @@ public class SshClient implements AutoCloseable {
 		}
 	}
 
-	private StringBuilder listSubDirectory(
+	/**
+	 * A regular file listed on the remote system
+	 */
+	public static class FileEntry {
+
+		/**
+		 * Path of the file: the listed directory, a slash and the file name
+		 */
+		public final String path;
+
+		/**
+		 * Size of the file, in bytes
+		 */
+		public final long size;
+
+		/**
+		 * Last modification time of the file, in seconds since the epoch
+		 */
+		public final long mtime;
+
+		/**
+		 * Creates a file entry
+		 *
+		 * @param path Path of the file
+		 * @param size Size of the file, in bytes
+		 * @param mtime Last modification time of the file, in seconds since the epoch
+		 */
+		public FileEntry(final String path, final long size, final long mtime) {
+			this.path = path;
+			this.size = size;
+			this.mtime = mtime;
+		}
+	}
+
+	/**
+	 * Compiles a file name mask, matched case-insensitively with {@link java.util.regex.Matcher#find()}.
+	 *
+	 * @param regExpMask The regular expression, or null or empty to match every name
+	 * @return The compiled mask
+	 */
+	private static Pattern compileMask(final String regExpMask) {
+		return regExpMask != null && !regExpMask.isEmpty()
+			? Pattern.compile(regExpMask, Pattern.CASE_INSENSITIVE)
+			: DEFAULT_MASK_PATTERN;
+	}
+
+	/**
+	 * Removes the trailing slash of a directory path, so that a file name can be appended after a slash.
+	 *
+	 * @param remoteDirectoryPath The directory path
+	 * @return The path without its trailing slash ("/" becomes an empty string)
+	 */
+	private static String stripTrailingSlash(final String remoteDirectoryPath) {
+		return remoteDirectoryPath.endsWith("/")
+			? remoteDirectoryPath.substring(0, remoteDirectoryPath.length() - 1)
+			: remoteDirectoryPath;
+	}
+
+	/**
+	 * Returns the attributes of a directory entry, those of its target when the entry is a symbolic link.
+	 *
+	 * @param sftpClient The SFTP client
+	 * @param path The path of the entry
+	 * @param entry The directory entry
+	 * @return The attributes, or null when the entry is a dangling symbolic link or its target cannot be read
+	 * @throws IOException When the communication with the remote host fails
+	 */
+	private static SFTPv3FileAttributes followSymlink(
+		final SFTPv3Client sftpClient,
+		final String path,
+		final SFTPv3DirectoryEntry entry
+	) throws IOException {
+		if (!entry.attributes.isSymlink()) {
+			return entry.attributes;
+		}
+		try {
+			return sftpClient.stat(path);
+		} catch (SFTPException e) {
+			return null;
+		}
+	}
+
+	private void listSubDirectory(
 		SFTPv3Client sftpClient,
 		String remoteDirectoryPath,
 		Pattern fileMaskPattern,
 		boolean includeSubfolders,
-		Integer depth,
-		StringBuilder resultBuilder
+		int depth,
+		List<FileEntry> entries
 	) throws IOException {
-		if (depth <= 15) {
-			List<SFTPv3DirectoryEntry> pathContents = sftpClient.ls(remoteDirectoryPath);
-
-			// Fix the remoteDirectoryPath (without the last '/')
-			if (remoteDirectoryPath.endsWith("/")) {
-				remoteDirectoryPath = remoteDirectoryPath.substring(0, remoteDirectoryPath.lastIndexOf("/"));
-			}
-
-			depth++;
-			for (SFTPv3DirectoryEntry file : pathContents) {
-				String filename = file.filename.trim();
-
-				if (filename.equals(".") || filename.equals("..")) {
-					continue;
-				}
-
-				SFTPv3FileAttributes fileAttributes = file.attributes;
-				String filePath = remoteDirectoryPath + "/" + filename;
-
-				if ((fileAttributes.permissions & 0120000) == 0120000) {
-					// Symbolic link
-					continue;
-				}
-
-				// CHECKSTYLE:OFF
-				if (
-					((fileAttributes.permissions & 0100000) == 0100000) ||
-					((fileAttributes.permissions & 0060000) == 0060000) ||
-					((fileAttributes.permissions & 0020000) == 0020000) ||
-					((fileAttributes.permissions & 0140000) == 0140000)
-				) {
-					// Regular/Block/Character/Socket files
-					final Matcher m = fileMaskPattern.matcher(filename);
-					if (m.find()) {
-						resultBuilder
-							.append(filePath)
-							.append(";")
-							.append(fileAttributes.mtime.toString())
-							.append(";")
-							.append(fileAttributes.size.toString())
-							.append("\n");
-					}
-					continue;
-				}
-				// CHECKSTYLE:ON
-
-				if ((fileAttributes.permissions & 0040000) == 0040000) {
-					// Directory
-					if (includeSubfolders) {
-						resultBuilder =
-							listSubDirectory(sftpClient, filePath, fileMaskPattern, includeSubfolders, depth, resultBuilder);
-					}
-				}
-			}
+		if (depth > 15) {
+			return;
 		}
 
-		return resultBuilder;
+		final String directoryPath = stripTrailingSlash(remoteDirectoryPath);
+		for (SFTPv3DirectoryEntry entry : sftpClient.ls(remoteDirectoryPath)) {
+			final String filename = entry.filename;
+			if (filename.equals(".") || filename.equals("..")) {
+				continue;
+			}
+
+			final String filePath = directoryPath + "/" + filename;
+
+			// A directory, but not a symbolic link to one, which could loop
+			if (entry.attributes.isDirectory()) {
+				if (includeSubfolders) {
+					listSubDirectory(sftpClient, filePath, fileMaskPattern, includeSubfolders, depth + 1, entries);
+				}
+				continue;
+			}
+
+			if (!fileMaskPattern.matcher(filename).find()) {
+				continue;
+			}
+
+			final SFTPv3FileAttributes attributes = followSymlink(sftpClient, filePath, entry);
+			if (attributes != null && attributes.isRegularFile()) {
+				entries.add(new FileEntry(filePath, attributes.size, attributes.mtime));
+			}
+		}
 	}
 
 	/**
-	 * List the content of the specified directory through the SSH connection
-	 * (using SCP)
+	 * List the regular files of the specified directory through SFTP. Symbolic links to regular files are
+	 * followed: the entry carries the size and modification time of the target. Dangling links are skipped.
 	 *
 	 * @param remoteDirectoryPath The path to the directory to list on the remote host
-	 * @param regExpFileMask A regular expression that listed files must match with to be listed
-	 * @param includeSubfolders Whether to parse subdirectories as well
-	 * @return The list of files in the specified directory, separated by end-of-lines
+	 * @param regExpFileMask A regular expression that the names of the listed files must contain
+	 * (case-insensitive, {@link java.util.regex.Matcher#find()}); null or empty to list every file
+	 * @param includeSubfolders Whether to list subdirectories as well (symbolic links to directories are not
+	 * followed, and no more than 15 levels are listed)
+	 * @return The files of the specified directory
 	 *
 	 * @throws IOException When something bad happens while communicating with the remote host
 	 * @throws IllegalStateException If called while not yet connected
 	 */
-	public String listFiles(String remoteDirectoryPath, String regExpFileMask, boolean includeSubfolders)
+	public List<FileEntry> listFiles(String remoteDirectoryPath, String regExpFileMask, boolean includeSubfolders)
 		throws IOException {
 		checkIfAuthenticated();
 
-		// Create an SFTP Client
-		SFTPv3Client sftpClient = new SFTPv3Client(sshConnection);
-
-		// Prepare the Pattern for fileMask
-		Pattern fileMaskPattern;
-		if (regExpFileMask != null && !regExpFileMask.isEmpty()) {
-			fileMaskPattern = Pattern.compile(regExpFileMask, Pattern.CASE_INSENSITIVE);
-		} else {
-			fileMaskPattern = DEFAULT_MASK_PATTERN;
+		final List<FileEntry> entries = new ArrayList<>();
+		final SFTPv3Client sftpClient = new SFTPv3Client(sshConnection);
+		try {
+			listSubDirectory(sftpClient, remoteDirectoryPath, compileMask(regExpFileMask), includeSubfolders, 1, entries);
+		} finally {
+			sftpClient.close();
 		}
+		return entries;
+	}
 
-		// Read the directory listing
-		StringBuilder resultBuilder = new StringBuilder();
-		listSubDirectory(sftpClient, remoteDirectoryPath, fileMaskPattern, includeSubfolders, 1, resultBuilder);
+	/**
+	 * List the subdirectories of the specified directory through SFTP. Symbolic links to directories are
+	 * followed and listed; dangling links are skipped. The mask is checked before a link is followed.
+	 *
+	 * @param remoteDirectoryPath The path to the directory to list on the remote host
+	 * @param regExpMask A regular expression that the names of the listed subdirectories must contain
+	 * (case-insensitive, {@link java.util.regex.Matcher#find()}); null or empty to list every subdirectory
+	 * @return The paths of the subdirectories: the specified directory, a slash and the subdirectory name
+	 *
+	 * @throws IOException When something bad happens while communicating with the remote host
+	 * @throws IllegalStateException If called while not yet connected
+	 */
+	public List<String> listSubdirectories(final String remoteDirectoryPath, final String regExpMask) throws IOException {
+		checkIfAuthenticated();
 
-		// Close the SFTP client
-		sftpClient.close();
+		final Pattern maskPattern = compileMask(regExpMask);
+		final String directoryPath = stripTrailingSlash(remoteDirectoryPath);
+		final List<String> subdirectories = new ArrayList<>();
+		final SFTPv3Client sftpClient = new SFTPv3Client(sshConnection);
+		try {
+			for (SFTPv3DirectoryEntry entry : sftpClient.ls(remoteDirectoryPath)) {
+				final String name = entry.filename;
+				if (name.equals(".") || name.equals("..") || !maskPattern.matcher(name).find()) {
+					continue;
+				}
 
-		// Update the response
-		return resultBuilder.toString();
+				final String path = directoryPath + "/" + name;
+				final SFTPv3FileAttributes attributes = followSymlink(sftpClient, path, entry);
+				if (attributes != null && attributes.isDirectory()) {
+					subdirectories.add(path);
+				}
+			}
+		} finally {
+			sftpClient.close();
+		}
+		return subdirectories;
 	}
 
 	/**

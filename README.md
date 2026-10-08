@@ -28,7 +28,7 @@ But it is strongly recommended to only use [GitHub Actions "Release to Maven Cen
 
 * Manually trigger the "Release" workflow
 * Specify the version being released and the next version number (SNAPSHOT)
-* Release the corresponding staging repository on [Sonatype's Nexus server](https://s01.oss.sonatype.org/)
+* The release is published to Maven Central automatically at the end of the workflow
 * Merge the PR that has been created to prepare the next version
 
 ## License
