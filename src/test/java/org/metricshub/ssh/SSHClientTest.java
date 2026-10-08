@@ -739,6 +739,8 @@ class SSHClientTest {
 						.when(mock.ls("/"))
 						.thenReturn(
 							Arrays.asList(
+								entry(".", DIRECTORY),
+								entry("..", DIRECTORY),
 								entry("top.txt", REGULAR_FILE, 1, 10),
 								entry("sub", DIRECTORY),
 								entry("sublink", SYMBOLIC_LINK)
@@ -753,8 +755,12 @@ class SSHClientTest {
 				Arrays.asList("/top.txt", "/sub/nested.log"),
 				paths(authenticatedClient().listFiles("/", null, true))
 			);
-			// A symbolic link to a directory is never descended into
-			Mockito.verify(mockedConstruction.constructed().get(0), Mockito.never()).ls("/sublink");
+			final SFTPv3Client sftpClient = mockedConstruction.constructed().get(0);
+			// Neither "." nor ".." nor a symbolic link to a directory is descended into
+			Mockito.verify(sftpClient, Mockito.never()).ls("/.");
+			Mockito.verify(sftpClient, Mockito.never()).ls("/..");
+			Mockito.verify(sftpClient, Mockito.never()).ls("/sublink");
+			Mockito.verify(sftpClient).close();
 		}
 
 		// The SFTP client is closed when the listing fails
