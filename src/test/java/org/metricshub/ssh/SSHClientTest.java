@@ -2,13 +2,19 @@ package org.metricshub.ssh;
 
 import com.trilead.ssh2.ChannelCondition;
 import com.trilead.ssh2.Connection;
+import com.trilead.ssh2.SFTPException;
 import com.trilead.ssh2.SFTPv3Client;
+import com.trilead.ssh2.SFTPv3DirectoryEntry;
 import com.trilead.ssh2.SFTPv3FileAttributes;
 import com.trilead.ssh2.Session;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -618,6 +624,214 @@ class SSHClientTest {
 			Mockito.doReturn(true).when(sshConnection).isAuthenticationComplete();
 
 			Assertions.assertEquals(1073741824L, sshClient.fileSize(filePath));
+		}
+	}
+
+	private static final int REGULAR_FILE = 0100644;
+	private static final int DIRECTORY = 0040755;
+	private static final int SYMBOLIC_LINK = 0120777;
+	private static final int CHARACTER_DEVICE = 0020666;
+	private static final int BLOCK_DEVICE = 0060660;
+	private static final int SOCKET = 0140755;
+
+	private static SFTPv3FileAttributes attributes(final int permissions, final long size, final long mtime) {
+		final SFTPv3FileAttributes attributes = new SFTPv3FileAttributes();
+		attributes.permissions = permissions;
+		attributes.size = size;
+		attributes.mtime = mtime;
+		return attributes;
+	}
+
+	private static SFTPv3DirectoryEntry entry(final String filename, final int permissions) {
+		return entry(filename, permissions, 0, 0);
+	}
+
+	private static SFTPv3DirectoryEntry entry(
+		final String filename,
+		final int permissions,
+		final long size,
+		final long mtime
+	) {
+		final SFTPv3DirectoryEntry entry = new SFTPv3DirectoryEntry();
+		entry.filename = filename;
+		entry.attributes = attributes(permissions, size, mtime);
+		return entry;
+	}
+
+	private static SshClient authenticatedClient() {
+		final Connection sshConnection = Mockito.mock(Connection.class);
+		Mockito.doReturn(true).when(sshConnection).isAuthenticationComplete();
+		final SshClient sshClient = Mockito.spy(new SshClient(HOSTNAME));
+		Mockito.doReturn(sshConnection).when(sshClient).getSshConnection();
+		return sshClient;
+	}
+
+	private static SFTPException noSuchFile() throws Exception {
+		// The constructor is package-private: the server reports SSH_FX_NO_SUCH_FILE (2)
+		final Constructor<SFTPException> constructor = SFTPException.class.getDeclaredConstructor(String.class, int.class);
+		constructor.setAccessible(true);
+		return constructor.newInstance("No such file", 2);
+	}
+
+	private static List<String> paths(final List<SshClient.FileEntry> entries) {
+		final List<String> paths = new ArrayList<>();
+		for (SshClient.FileEntry entry : entries) {
+			paths.add(entry.path);
+		}
+		return paths;
+	}
+
+	@Test
+	void testListFiles() throws Exception {
+		final SFTPException noSuchFile = noSuchFile();
+		final List<SFTPv3DirectoryEntry> logs = Arrays.asList(
+			entry(".", DIRECTORY),
+			entry("..", DIRECTORY),
+			entry("app.log", REGULAR_FILE, 100, 1000),
+			entry(" my app;1.LOG ", REGULAR_FILE, 200, 2000),
+			entry("link.log", SYMBOLIC_LINK),
+			entry("dangling.log", SYMBOLIC_LINK),
+			entry("dirlink.log", SYMBOLIC_LINK),
+			entry("unrelated.lnk", SYMBOLIC_LINK),
+			entry("tty.log", CHARACTER_DEVICE),
+			entry("disk.log", BLOCK_DEVICE),
+			entry("socket.log", SOCKET),
+			entry("notes.txt", REGULAR_FILE, 50, 500),
+			entry("sub", DIRECTORY)
+		);
+
+		// Directory with a trailing slash, no subfolders
+		try (
+			final MockedConstruction<SFTPv3Client> mockedConstruction = Mockito.mockConstruction(
+				SFTPv3Client.class,
+				(mock, context) -> {
+					Mockito.when(mock.ls("/logs/")).thenReturn(logs);
+					Mockito.when(mock.stat("/logs/link.log")).thenReturn(attributes(REGULAR_FILE, 300, 3000));
+					Mockito.when(mock.stat("/logs/dangling.log")).thenThrow(noSuchFile);
+					Mockito.when(mock.stat("/logs/dirlink.log")).thenReturn(attributes(DIRECTORY, 0, 0));
+				}
+			)
+		) {
+			// Case-insensitive mask matched with find(); names are kept verbatim (spaces, semicolon)
+			final List<SshClient.FileEntry> entries = authenticatedClient().listFiles("/logs/", "\\.log", false);
+
+			Assertions.assertEquals(Arrays.asList("/logs/app.log", "/logs/ my app;1.LOG ", "/logs/link.log"), paths(entries));
+			Assertions.assertEquals(100, entries.get(0).size);
+			Assertions.assertEquals(1000, entries.get(0).mtime);
+			Assertions.assertEquals(200, entries.get(1).size);
+			// A symbolic link carries the size and modification time of its target
+			Assertions.assertEquals(300, entries.get(2).size);
+			Assertions.assertEquals(3000, entries.get(2).mtime);
+
+			final SFTPv3Client sftpClient = mockedConstruction.constructed().get(0);
+			// A link whose name does not match is never followed, a subfolder is not listed
+			Mockito.verify(sftpClient, Mockito.never()).stat("/logs/unrelated.lnk");
+			Mockito.verify(sftpClient, Mockito.never()).ls("/logs/sub");
+			Mockito.verify(sftpClient).close();
+		}
+
+		// Subfolders, no mask
+		try (
+			final MockedConstruction<SFTPv3Client> mockedConstruction = Mockito.mockConstruction(
+				SFTPv3Client.class,
+				(mock, context) -> {
+					Mockito
+						.when(mock.ls("/"))
+						.thenReturn(
+							Arrays.asList(
+								entry("top.txt", REGULAR_FILE, 1, 10),
+								entry("sub", DIRECTORY),
+								entry("sublink", SYMBOLIC_LINK)
+							)
+						);
+					Mockito.when(mock.ls("/sub")).thenReturn(Arrays.asList(entry("nested.log", REGULAR_FILE, 2, 20)));
+					Mockito.when(mock.stat("/sublink")).thenReturn(attributes(DIRECTORY, 0, 0));
+				}
+			)
+		) {
+			Assertions.assertEquals(
+				Arrays.asList("/top.txt", "/sub/nested.log"),
+				paths(authenticatedClient().listFiles("/", null, true))
+			);
+			// A symbolic link to a directory is never descended into
+			Mockito.verify(mockedConstruction.constructed().get(0), Mockito.never()).ls("/sublink");
+		}
+
+		// The SFTP client is closed when the listing fails
+		try (
+			final MockedConstruction<SFTPv3Client> mockedConstruction = Mockito.mockConstruction(
+				SFTPv3Client.class,
+				(mock, context) -> Mockito.when(mock.ls("/missing")).thenThrow(noSuchFile)
+			)
+		) {
+			final SshClient sshClient = authenticatedClient();
+			Assertions.assertThrows(SFTPException.class, () -> sshClient.listFiles("/missing", null, false));
+			Mockito.verify(mockedConstruction.constructed().get(0)).close();
+		}
+
+		// Not authenticated
+		try (final SshClient sshClient = new SshClient(HOSTNAME)) {
+			Assertions.assertThrows(IllegalStateException.class, () -> sshClient.listFiles("/logs", null, false));
+		}
+	}
+
+	@Test
+	void testListSubdirectories() throws Exception {
+		final SFTPException noSuchFile = noSuchFile();
+		final List<SFTPv3DirectoryEntry> opt = Arrays.asList(
+			entry(".", DIRECTORY),
+			entry("..", DIRECTORY),
+			entry("node1", DIRECTORY),
+			entry("Node2", SYMBOLIC_LINK),
+			entry("node3", SYMBOLIC_LINK),
+			entry("node4", SYMBOLIC_LINK),
+			entry("node5", REGULAR_FILE),
+			entry("other", DIRECTORY),
+			entry("otherlink", SYMBOLIC_LINK)
+		);
+
+		try (
+			final MockedConstruction<SFTPv3Client> mockedConstruction = Mockito.mockConstruction(
+				SFTPv3Client.class,
+				(mock, context) -> {
+					Mockito.when(mock.ls("/opt")).thenReturn(opt);
+					Mockito.when(mock.ls("/")).thenReturn(opt);
+					Mockito.when(mock.stat(Mockito.endsWith("Node2"))).thenReturn(attributes(DIRECTORY, 0, 0));
+					Mockito.when(mock.stat(Mockito.endsWith("node3"))).thenThrow(noSuchFile);
+					Mockito.when(mock.stat(Mockito.endsWith("node4"))).thenReturn(attributes(REGULAR_FILE, 0, 0));
+					Mockito.when(mock.stat(Mockito.endsWith("otherlink"))).thenReturn(attributes(DIRECTORY, 0, 0));
+				}
+			)
+		) {
+			final SshClient sshClient = authenticatedClient();
+
+			// Case-insensitive mask; a link to a directory is listed, a dangling link or a link to a file is not
+			Assertions.assertEquals(Arrays.asList("/opt/node1", "/opt/Node2"), sshClient.listSubdirectories("/opt", "^node"));
+			Mockito.verify(mockedConstruction.constructed().get(0), Mockito.never()).stat("/opt/otherlink");
+			Mockito.verify(mockedConstruction.constructed().get(0)).close();
+
+			// No mask, root directory
+			Assertions.assertEquals(
+				Arrays.asList("/node1", "/Node2", "/other", "/otherlink"),
+				sshClient.listSubdirectories("/", "")
+			);
+		}
+
+		// The SFTP client is closed when the listing fails
+		try (
+			final MockedConstruction<SFTPv3Client> mockedConstruction = Mockito.mockConstruction(
+				SFTPv3Client.class,
+				(mock, context) -> Mockito.when(mock.ls("/missing")).thenThrow(noSuchFile)
+			)
+		) {
+			final SshClient sshClient = authenticatedClient();
+			Assertions.assertThrows(SFTPException.class, () -> sshClient.listSubdirectories("/missing", null));
+			Mockito.verify(mockedConstruction.constructed().get(0)).close();
+		}
+
+		// Not authenticated
+		try (final SshClient sshClient = new SshClient(HOSTNAME)) {
+			Assertions.assertThrows(IllegalStateException.class, () -> sshClient.listSubdirectories("/opt", null));
 		}
 	}
 }
